@@ -23,6 +23,9 @@ lake-packages/
 .lake/
 build/
 *.olean
+character_degrees_n*.lean
+*_skeleton.lean
+_aristotle_temp_*.lean
 
 # GAP
 gap_output/
@@ -46,6 +49,10 @@ Thumbs.db
 test_results/
 output/
 results/
+targets*.json
+oracle*.json
+llm_run*.json
+aristotle_result*.json
 
 # Local scratch tests (not part of main repo flow)
 test_apis.py
