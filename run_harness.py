@@ -16,6 +16,7 @@ from typing import Any, Optional
 import agent_architecture_backend as backend
 import llm_flow
 import repair_planner
+import aristotle_integration
 
 
 def _read_text(path: str) -> str:
@@ -200,6 +201,35 @@ def cmd_repair_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_aristotle(args: argparse.Namespace) -> int:
+    llm_run = _read_json(args.llm_run)
+    if not isinstance(llm_run, dict):
+        raise ValueError("llm-run JSON must be an object")
+
+    result = aristotle_integration.integrate_aristotle_into_flow(
+        llm_run_result=llm_run,
+        output_lean_path=args.out_lean,
+        aristotle_timeout=args.timeout,
+    )
+
+    _write_json(result, args.out)
+
+    if result.get("status") == "success":
+        remaining_sorries = result.get("completed_sorries", 0)
+        if remaining_sorries == 0:
+            print(f"\n✅ All sorries completed! Lean proof ready at: {args.out_lean}")
+            return 0
+        else:
+            print(f"\n⚠️  {remaining_sorries} sorries remaining in: {args.out_lean}")
+            return 2
+    elif result.get("status") == "skipped":
+        print(f"\n⚠️  Skipped: {result.get('reason')}")
+        return 2
+    else:
+        print(f"\n❌ Error: {result.get('reason')}")
+        return 1
+
+
 def _add_common_io_args(p: argparse.ArgumentParser, include_oracle: bool = False) -> None:
     p.add_argument("--targets", required=True, help="Path to targets JSON")
     p.add_argument("--solver", required=True, help="Path to solver JSON")
@@ -295,6 +325,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_plan.add_argument("--leak-oracle", type=int, default=0, help="Dev only: include oracle diff hints")
     p_repair_plan.add_argument("--out", help="Optional output path (defaults to stdout)")
     p_repair_plan.set_defaults(func=cmd_repair_plan)
+
+    p_aristotle = sub.add_parser("aristotle", help="Complete Lean proofs using Aristotle API")
+    p_aristotle.add_argument("--llm-run", required=True, help="Path to llm-flow output JSON")
+    p_aristotle.add_argument("--out-lean", required=True, help="Path to save completed Lean file")
+    p_aristotle.add_argument("--timeout", type=int, default=600, help="Aristotle API timeout in seconds (default: 600)")
+    p_aristotle.add_argument("--out", help="Optional path to save Aristotle results JSON")
+    p_aristotle.set_defaults(func=cmd_aristotle)
 
     return parser
 
