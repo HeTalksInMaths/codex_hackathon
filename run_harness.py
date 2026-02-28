@@ -9,14 +9,20 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
+
+from dotenv import load_dotenv
 
 import agent_architecture_backend as backend
 import llm_flow
 import repair_planner
 import aristotle_integration
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def _read_text(path: str) -> str:
@@ -206,7 +212,8 @@ def cmd_aristotle(args: argparse.Namespace) -> int:
     if not isinstance(llm_run, dict):
         raise ValueError("llm-run JSON must be an object")
 
-    result = aristotle_integration.integrate_aristotle_into_flow(
+    # Use iterative approach - processes one theorem at a time for faster feedback
+    result = aristotle_integration.integrate_aristotle_into_flow_iterative(
         llm_run_result=llm_run,
         output_lean_path=args.out_lean,
         aristotle_timeout=args.timeout,
@@ -222,6 +229,12 @@ def cmd_aristotle(args: argparse.Namespace) -> int:
         else:
             print(f"\n⚠️  {remaining_sorries} sorries remaining in: {args.out_lean}")
             return 2
+    elif result.get("status") == "partial":
+        successful = result.get("successful_theorems", 0)
+        total = result.get("total_theorems", 0)
+        remaining = result.get("completed_sorries", 0)
+        print(f"\n⚠️  Partial success: {successful}/{total} theorems, {remaining} sorries remaining")
+        return 2
     elif result.get("status") == "skipped":
         print(f"\n⚠️  Skipped: {result.get('reason')}")
         return 2

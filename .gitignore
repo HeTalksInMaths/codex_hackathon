@@ -23,9 +23,12 @@ lake-packages/
 .lake/
 build/
 *.olean
+lake-manifest.json
 character_degrees_n*.lean
 *_skeleton.lean
 _aristotle_temp_*.lean
+test_*.lean
+*_completed.lean
 
 # GAP
 gap_output/
@@ -58,3 +61,6 @@ aristotle_result*.json
 test_apis.py
 test_gap.g
 test_lean.lean
+test_autonomous.sh
+gen_*.g
+lemma_signatures.lean
