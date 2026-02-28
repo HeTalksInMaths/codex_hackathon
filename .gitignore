@@ -1,0 +1,53 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Lean
+lake-packages/
+.lake/
+build/
+*.olean
+
+# GAP
+gap_output/
+*.gap.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test outputs
+test_results/
+output/
+results/
+
+# Local scratch tests (not part of main repo flow)
+test_apis.py
+test_gap.g
+test_lean.lean
