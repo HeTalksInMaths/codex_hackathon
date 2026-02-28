@@ -7,12 +7,15 @@ This wraps `agent_architecture_backend.py` so you can run the pipeline from file
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 import agent_architecture_backend as backend
+import llm_flow
+import repair_planner
 
 
 def _read_text(path: str) -> str:
@@ -153,6 +156,50 @@ def cmd_repair_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_llm_flow(args: argparse.Namespace) -> int:
+    targets = backend.parse_targets_json(_read_text(args.targets))
+    oracle = backend.parse_oracle_json(_read_text(args.oracle)) if args.oracle else None
+    spec_lock = _load_spec_lock(args.spec_lock, n=int(targets["n"]), solver_style=args.solver_style)
+
+    model_config = llm_flow.ModelConfig(
+        solver_model=args.solver_model,
+        repair_model=args.repair_model,
+        harvest_model=args.harvest_model,
+    )
+
+    result = llm_flow.run_agentic_flow(
+        targets=targets,
+        solver_style=args.solver_style,
+        spec_lock=spec_lock,
+        oracle=oracle,
+        unlock_policy=args.lean_unlock_policy,
+        model_config=model_config,
+        max_repairs=args.max_repairs,
+    )
+    _write_json(result, args.out)
+
+    pre_ok = bool(result.get("precheck", {}).get("pass"))
+    if args.oracle:
+        oracle_ok = bool(result.get("oracle_report", {}).get("global_set_of_sets_pass"))
+        return 0 if pre_ok and oracle_ok else 2
+    return 0 if pre_ok else 2
+
+
+def cmd_repair_plan(args: argparse.Namespace) -> int:
+    payload = _read_json(args.artifact)
+    artifact = payload.get("artifact", payload)
+    if not isinstance(artifact, dict):
+        raise ValueError("artifact JSON must be an object or contain an artifact object")
+
+    plan = repair_planner.build_plan(
+        artifact=artifact,
+        mode=args.mode,
+        leak_oracle=bool(args.leak_oracle),
+    )
+    _write_json(asdict(plan), args.out)
+    return 0
+
+
 def _add_common_io_args(p: argparse.ArgumentParser, include_oracle: bool = False) -> None:
     p.add_argument("--targets", required=True, help="Path to targets JSON")
     p.add_argument("--solver", required=True, help="Path to solver JSON")
@@ -218,6 +265,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_repair_prompt.add_argument("--spec-lock", help="Optional path to spec_lock JSON")
     p_repair_prompt.add_argument("--out", help="Optional output path (defaults to stdout)")
     p_repair_prompt.set_defaults(func=cmd_repair_prompt)
+
+    p_llm_flow = sub.add_parser("llm-flow", help="Run full LLM-backed agentic flow (solve, optional repair, optional harvest)")
+    p_llm_flow.add_argument("--targets", required=True, help="Path to targets JSON")
+    p_llm_flow.add_argument("--oracle", help="Optional oracle JSON path")
+    p_llm_flow.add_argument(
+        "--solver-style",
+        required=True,
+        choices=["BY_GROUP_ID", "GLOBAL_SET_OF_SETS"],
+        help="Solver output style",
+    )
+    p_llm_flow.add_argument("--spec-lock", help="Optional path to spec_lock JSON")
+    p_llm_flow.add_argument(
+        "--lean-unlock-policy",
+        default="GLOBAL_SET_OF_SETS",
+        choices=["STRICT_BY_ID", "GLOBAL_SET_OF_SETS"],
+        help="Included in export artifact",
+    )
+    p_llm_flow.add_argument("--solver-model", default=llm_flow.DEFAULT_MODEL, help="OpenAI model used for initial solve")
+    p_llm_flow.add_argument("--repair-model", default=llm_flow.DEFAULT_MODEL, help="OpenAI model used for repair pass")
+    p_llm_flow.add_argument("--harvest-model", default=llm_flow.DEFAULT_MODEL, help="OpenAI model used for proof harvest")
+    p_llm_flow.add_argument("--max-repairs", type=int, default=2, help="Maximum automated repair attempts after initial solve")
+    p_llm_flow.add_argument("--out", help="Optional output path (defaults to stdout)")
+    p_llm_flow.set_defaults(func=cmd_llm_flow)
+
+    p_repair_plan = sub.add_parser("repair-plan", help="Build repair plan/prompts from run artifact JSON")
+    p_repair_plan.add_argument("--artifact", required=True, help="Path to run artifact JSON")
+    p_repair_plan.add_argument("--mode", choices=["benchmark", "dev"], default="benchmark")
+    p_repair_plan.add_argument("--leak-oracle", type=int, default=0, help="Dev only: include oracle diff hints")
+    p_repair_plan.add_argument("--out", help="Optional output path (defaults to stdout)")
+    p_repair_plan.set_defaults(func=cmd_repair_plan)
 
     return parser
 

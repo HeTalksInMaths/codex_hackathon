@@ -60,3 +60,38 @@ python run_harness.py solver-prompt \
 Notes:
 - Exit code is `0` on pass, `2` on benchmark/check failure, `1` on input/runtime error.
 - `--spec-lock spec_lock.json` is optional; if omitted, spec lock is generated automatically.
+
+## OpenAI model usage
+
+Current state before this update: the repo had prompt builders/checkers but **no direct OpenAI API call path**, so there was no active model bound in code.
+
+Now you can run an end-to-end model-backed flow with `llm-flow`:
+
+```bash
+python run_harness.py llm-flow \
+  --targets targets.json \
+  --oracle oracle.json \
+  --solver-style BY_GROUP_ID \
+  --solver-model gpt-5.2 \
+  --repair-model gpt-5.2 \
+  --harvest-model gpt-5.2 \
+  --max-repairs 3 \
+  --out llm_run.json
+```
+
+Notes:
+- Reasoning policy is fixed in flow: solve=`medium`, first repair=`high`, second repair and beyond=`xhigh` alias (sent as API `high`).
+- Defaults are configurable with env vars: `OPENAI_MODEL`, `OPENAI_SOLVER_MODEL`, `OPENAI_REPAIR_MODEL`, `OPENAI_HARVEST_MODEL`.
+- Requires `OPENAI_API_KEY` in environment.
+
+## Repair loops and planning
+
+This repo now supports two repair-loop helpers:
+
+1) Built-in automatic repair retries inside `llm-flow` via `--max-repairs`.
+2) `repair_planner.py` (and `run_harness.py repair-plan`) to generate staged repair plans/prompts from a run artifact.
+
+```bash
+python run_harness.py repair-plan --artifact llm_run.json --mode benchmark --out repair_plan.json
+python repair_planner.py --artifact llm_run.json --mode benchmark --print-json 1
+```
