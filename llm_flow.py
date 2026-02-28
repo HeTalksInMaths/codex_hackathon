@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -54,7 +55,114 @@ def _extract_text(resp: Any) -> str:
     return "\n".join(chunks).strip()
 
 
-def _call_json_model(client: OpenAI, prompt: str, model: str, reasoning_effort: str) -> tuple[dict[str, Any], str]:
+def _strip_code_fences(text: str) -> str:
+    s = text.strip()
+    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", s, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return s
+
+
+def _extract_first_json_span(text: str) -> Optional[str]:
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        return None
+
+    start = min(starts)
+    opener = text[start]
+    closer = "}" if opener == "{" else "]"
+
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None
+
+
+def _normalize_smart_quotes(text: str) -> str:
+    return (
+        text.replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+
+
+def _remove_trailing_commas(text: str) -> str:
+    return re.sub(r",(\s*[}\]])", r"\1", text)
+
+
+def _parse_json_lenient(text: str) -> tuple[dict[str, Any], str]:
+    seen: set[str] = set()
+    candidates: list[tuple[str, str]] = []
+
+    def add(name: str, candidate: str) -> None:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            candidates.append((name, candidate))
+
+    add("strict_raw", text)
+    add("trimmed", text.replace("\ufeff", "").strip())
+
+    for name, candidate in list(candidates):
+        fenced = _strip_code_fences(candidate)
+        if fenced != candidate:
+            add(f"{name}+strip_code_fence", fenced)
+
+    for name, candidate in list(candidates):
+        extracted = _extract_first_json_span(candidate)
+        if extracted and extracted != candidate:
+            add(f"{name}+extract_json_span", extracted)
+
+    for name, candidate in list(candidates):
+        smart = _normalize_smart_quotes(candidate)
+        if smart != candidate:
+            add(f"{name}+normalize_smart_quotes", smart)
+
+    for name, candidate in list(candidates):
+        no_trailing = _remove_trailing_commas(candidate)
+        if no_trailing != candidate:
+            add(f"{name}+remove_trailing_commas", no_trailing)
+
+    last_err: Optional[json.JSONDecodeError] = None
+    for name, candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_err = exc
+            continue
+        if not isinstance(parsed, dict):
+            raise LLMFlowError(f"Model JSON root must be an object; got {type(parsed).__name__}")
+        return parsed, name
+
+    if last_err is None:
+        raise LLMFlowError("Model returned empty/invalid output after normalization attempts")
+    raise LLMFlowError(f"Model did not return valid JSON: {last_err}\nRaw output:\n{text}")
+
+
+def _call_json_model(client: OpenAI, prompt: str, model: str, reasoning_effort: str) -> tuple[dict[str, Any], str, str]:
     effort = normalize_reasoning_effort(reasoning_effort)
     resp = client.responses.create(
         model=model,
@@ -69,10 +177,8 @@ def _call_json_model(client: OpenAI, prompt: str, model: str, reasoning_effort: 
     text = _extract_text(resp)
     if not text:
         raise LLMFlowError("Model returned empty response")
-    try:
-        return json.loads(text), effort
-    except json.JSONDecodeError as exc:
-        raise LLMFlowError(f"Model did not return valid JSON: {exc}\nRaw output:\n{text}") from exc
+    payload, parse_strategy = _parse_json_lenient(text)
+    return payload, effort, parse_strategy
 
 
 def _repair_effort(repair_attempt_index: int) -> str:
@@ -97,8 +203,16 @@ def run_agentic_flow(
     call_trace: list[dict[str, str]] = []
 
     solver_prompt = backend.build_solver_prompt_v2(targets=targets, spec_lock=spec_lock, solver_style=solver_style)
-    solver, sent_effort = _call_json_model(client, solver_prompt, cfg.solver_model, "medium")
-    call_trace.append({"step": "solve", "model": cfg.solver_model, "effort_requested": "medium", "effort_sent": sent_effort})
+    solver, sent_effort, parse_strategy = _call_json_model(client, solver_prompt, cfg.solver_model, "medium")
+    call_trace.append(
+        {
+            "step": "solve",
+            "model": cfg.solver_model,
+            "effort_requested": "medium",
+            "effort_sent": sent_effort,
+            "parse_strategy": parse_strategy,
+        }
+    )
 
     precheck = backend.run_precheck(
         targets_obj=targets,
@@ -116,13 +230,14 @@ def run_agentic_flow(
             precheck=precheck,
         )
         requested_effort = _repair_effort(repair_attempts)
-        solver, sent_effort = _call_json_model(client, repair_prompt, cfg.repair_model, requested_effort)
+        solver, sent_effort, parse_strategy = _call_json_model(client, repair_prompt, cfg.repair_model, requested_effort)
         call_trace.append(
             {
                 "step": f"repair_{repair_attempts + 1}",
                 "model": cfg.repair_model,
                 "effort_requested": requested_effort,
                 "effort_sent": sent_effort,
+                "parse_strategy": parse_strategy,
             }
         )
         precheck = backend.run_precheck(
@@ -152,8 +267,16 @@ def run_agentic_flow(
                 unlock_policy=unlock_policy,
                 oracle_report=oracle_report,
             )
-            proof_plan, sent_effort = _call_json_model(client, harvest_prompt, cfg.harvest_model, "high")
-            call_trace.append({"step": "harvest", "model": cfg.harvest_model, "effort_requested": "high", "effort_sent": sent_effort})
+            proof_plan, sent_effort, parse_strategy = _call_json_model(client, harvest_prompt, cfg.harvest_model, "high")
+            call_trace.append(
+                {
+                    "step": "harvest",
+                    "model": cfg.harvest_model,
+                    "effort_requested": "high",
+                    "effort_sent": sent_effort,
+                    "parse_strategy": parse_strategy,
+                }
+            )
 
     artifact = backend.build_export_artifact(
         n=int(targets["n"]),
