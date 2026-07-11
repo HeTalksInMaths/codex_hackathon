@@ -12,14 +12,13 @@ on:
 jobs:
   compile:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lean-hanoi-ci
     steps:
       - uses: actions/checkout@v4
       - uses: leanprover/lean-action@v1
         with:
           auto-config: false
           use-mathlib-cache: true
+          lake-package-directory: lean-hanoi-ci
       - name: Compile improved Hanoi file
+        working-directory: lean-hanoi-ci
         run: lake env lean TowerOfHanoiImproved.lean
