@@ -1,0 +1,41 @@
+name: Lean Hanoi Compile
+
+on:
+  push:
+    branches:
+      - tmp/lean-hanoi-compile-20260711
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean through elan
+        run: |
+          set -o pipefail
+          TOOLCHAIN=$(cat lean-hanoi-ci/lean-toolchain)
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
+            | sh -s -- -y --default-toolchain "$TOOLCHAIN"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Fetch Mathlib dependencies
+        working-directory: lean-hanoi-ci
+        run: |
+          lake update
+          lake exe cache get
+      - name: Compile improved Hanoi file
+        id: compile
+        continue-on-error: true
+        working-directory: lean-hanoi-ci
+        run: lake env lean TowerOfHanoiImproved.lean > lean-output.txt 2>&1
+      - name: Upload Lean diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-hanoi-diagnostics
+          path: lean-hanoi-ci/lean-output.txt
+      - name: Preserve compile status
+        if: steps.compile.outcome != 'success'
+        run: exit 1
