@@ -1,0 +1,22 @@
+name: Lean Hanoi Compile
+
+on:
+  push:
+    branches:
+      - tmp/lean-hanoi-compile-20260711
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lean-hanoi-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          use-mathlib-cache: true
+      - name: Compile improved Hanoi file
+        run: lake env lean TowerOfHanoiImproved.lean
