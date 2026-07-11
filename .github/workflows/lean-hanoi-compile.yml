@@ -27,5 +27,15 @@ jobs:
           lake update
           lake exe cache get
       - name: Compile improved Hanoi file
+        id: compile
+        continue-on-error: true
         working-directory: lean-hanoi-ci
-        run: lake env lean TowerOfHanoiImproved.lean
+        run: lake env lean TowerOfHanoiImproved.lean > lean-output.txt 2>&1
+      - name: Upload Lean diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-hanoi-diagnostics
+          path: lean-hanoi-ci/lean-output.txt
+      - name: Preserve compile status
+        if: steps.compile.outcome != 'success'
+        run: exit 1
